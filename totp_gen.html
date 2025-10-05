@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TOTP Dashboard (offline)</title>
+<style>
+  :root{
+    --bg:#0b0c10;--panel:#121318;--muted:#8a8f98;--text:#e6e7ea;--accent:#4da3ff;--danger:#ff5670;--ok:#28c18f;
+    --border:#1c1f28;--shadow: rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Ubuntu, Arial, sans-serif;background:linear-gradient(180deg,#0a0b10,#0d0e14);color:var(--text)}
+  .wrap{max-width:1100px;margin:0 auto;padding:18px}
+  header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:4px 0 14px}
+  h1{font-size:20px;margin:0}
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:8px;align-items:center}
+  .btn{appearance:none;border:1px solid var(--border);background:#171923;color:var(--text);padding:8px 12px;border-radius:10px;cursor:pointer;box-shadow:0 2px 8px var(--shadow);transition:.15s}
+  .btn:hover{border-color:#273046;transform:translateY(-1px)}
+  .btn.secondary{background:#151722}
+  .btn.danger{background:#23131a;border-color:#3a1e27;color:#ffd7de}
+  .btn.icon{padding:7px 9px}
+  .input, textarea{width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:#0f1118;color:var(--text)}
+  textarea{min-height:110px;resize:vertical}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:0 6px 16px var(--shadow)}
+  .panel .head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  .panel .body{padding:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+  .card{background:#12141d;border:1px solid var(--border);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px;box-shadow:0 6px 16px var(--shadow)}
+  .issuer{font-size:12px;color:var(--muted)}
+  .label{font-weight:600;word-break:break-word}
+  .code{font:700 28px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;letter-spacing:1px;user-select:all;cursor:pointer}
+  .meta{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
+  .meta .sp{margin:0 4px;opacity:.5}
+  .progress{height:7px;background:#0c0f16;border:1px solid var(--border);border-radius:999px;overflow:hidden}
+  .bar{height:100%;width:0;background:linear-gradient(90deg,#2d7cff,#43c6ff)}
+  .footer{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .secret{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9aa0aa;font-size:12px}
+  .hint{font-size:12px;color:var(--muted)}
+  .tag{padding:2px 6px;border:1px solid #2a3347;background:#121726;color:#b9c4ff;border-radius:6px;font-size:11px}
+  .danger-text{color:#ff98a8}
+  .spacer{flex:1}
+  .copy-ok{color:var(--ok);font-size:12px}
+  .grid-empty{color:var(--muted);padding:6px}
+  .small{font-size:12px}
+  @media (max-width:640px){header{flex-direction:column;align-items:flex-start}.footer .secret{max-width:45%}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>TOTP Dashboard (локально)</h1>
+        <div class="muted small">Коды 2FA для нескольких токенов. Данные хранятся в <b>localStorage</b>, без сети.</div>
+      </div>
+      <div class="row">
+        <button class="btn secondary" id="btnImport">Импорт JSON</button>
+        <button class="btn secondary" id="btnExport">Экспорт JSON</button>
+      </div>
+      <input type="file" id="fileInput" accept="application/json" hidden>
+    </header>
+
+    <section class="panel" aria-label="Добавить токены">
+      <div class="head">
+        <div><b>Добавить токены</b></div>
+        <div class="hint">Форматы: <code>otpauth://...</code> или <code>SECRET [Метка]</code> — по строке на запись</div>
+      </div>
+      <div class="body">
+        <textarea id="multiInput" placeholder="Примеры:\notpauth://totp/GitHub:max@example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub\nJBSWY3DPEHPK3PXP GitHub"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="btnAdd">Добавить</button>
+          <button class="btn secondary" id="btnPaste">Вставить из буфера</button>
+          <div class="spacer"></div>
+          <input class="input" id="filter" placeholder="Фильтр (метка/эмитент/секрет)" style="max-width:320px">
+        </div>
+      </div>
+    </section>
+
+    <div style="height:10px"></div>
+
+    <section id="cards" class="grid" aria-live="polite"></section>
+
+    <div id="empty" class="grid-empty" style="display:none">Нет сохранённых токенов.</div>
+
+    <p class="hint" style="margin-top:14px">Безопасность: секреты TOTP сохраняются <span class="danger-text">в открытом виде</span> в localStorage. Используйте только на доверенном устройстве.</p>
+  </div>
+
+<script>
+(function(){
+  // ===== Types & Constants =====
+  const STORAGE_KEY = 'totp_dashboard_tokens_v1';
+  const ALGOS = ['SHA1','SHA256','SHA512'];
+
+  // ===== Helpers =====
+  const $ = sel => document.querySelector(sel);
+  const elCards = $('#cards');
+  const elEmpty = $('#empty');
+  const elInput = $('#multiInput');
+  const elFilter = $('#filter');
+  const elBtnAdd = $('#btnAdd');
+  const elBtnPaste = $('#btnPaste');
+  const elBtnExport = $('#btnExport');
+  const elBtnImport = $('#btnImport');
+  const elFile = $('#fileInput');
+
+  function uuid(){ try{ return crypto.randomUUID(); }catch{ return Math.random().toString(36).slice(2);} }
+  function sanitizeBase32(s){ return s.replace(/\s+/g,'').toUpperCase().replace(/=+$/,''); }
+
+  function base32ToBytes(b32){
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const clean = sanitizeBase32(b32);
+    let bits = 0, value = 0; const out = [];
+    for(const ch of clean){
+      const idx = alphabet.indexOf(ch);
+      if(idx === -1) continue;
+      value = (value << 5) | idx;
+      bits += 5;
+      if(bits >= 8){ out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+    }
+    return new Uint8Array(out);
+  }
+
+  function counterToBuf(counter){
+    const buf = new ArrayBuffer(8); const view = new DataView(buf);
+    const hi = Math.floor(counter / 2**32); const lo = counter >>> 0;
+    view.setUint32(0, hi); view.setUint32(4, lo);
+    return new Uint8Array(buf);
+  }
+
+  async function hmac(algo, keyBytes, msg){
+    const key = await crypto.subtle.importKey(
+      'raw',
+      keyBytes,
+      { name:'HMAC', hash:{ name: mapAlgo(algo) } },
+      false,
+      ['sign']
+    );
+    return new Uint8Array(await crypto.subtle.sign('HMAC', key, msg));
+  }
+
+  function truncateCode(hmacResult){
+    const offset = hmacResult[hmacResult.length - 1] & 0x0f;
+    return ((hmacResult[offset] & 0x7f) << 24) |
+           ((hmacResult[offset+1] & 0xff) << 16) |
+           ((hmacResult[offset+2] & 0xff) << 8) |
+           (hmacResult[offset+3] & 0xff);
+  }
+
+  async function totp(token, nowMs){
+    const t = Math.floor(nowMs / 1000);
+    const counter = Math.floor(t / token.period);
+    const msg = counterToBuf(counter);
+    const key = base32ToBytes(token.secret);
+    const sig = await hmac(token.algorithm, key, msg);
+    const p = truncateCode(sig);
+    const code = (p % 10 ** token.digits).toString().padStart(token.digits, '0');
+    return code;
+  }
+
+  function formatCode(code){
+    if(code.length === 6) return code.slice(0,3)+' '+code.slice(3);
+    if(code.length === 8) return code.slice(0,4)+' '+code.slice(4);
+    return code;
+  }
+
+  function parseOtpAuth(uri){
+    try{
+      const u = new URL(uri);
+      if(u.protocol !== 'otpauth:') return null;
+      if(u.host.toLowerCase() !== 'totp') return null;
+      const rawLabel = decodeURIComponent(u.pathname.replace(/^\//,''));
+      let issuerFromPath, label = rawLabel;
+      if(rawLabel.includes(':')){ const [iss, lab] = rawLabel.split(':'); issuerFromPath = iss; label = lab; }
+      const sp = u.searchParams;
+      const secret = sp.get('secret') || '';
+      const issuer = sp.get('issuer') || issuerFromPath;
+      const algorithm = (sp.get('algorithm')||'SHA1').toUpperCase();
+      const digits = parseInt(sp.get('digits')||'6',10);
+      const period = parseInt(sp.get('period')||'30',10);
+      return { label, issuer, secret: sanitizeBase32(secret), algorithm, digits, period };
+    }catch{ return null; }
+  }
+
+  function parseLooseLine(line){
+    const trimmed = line.trim();
+    if(!trimmed) return null;
+    if(trimmed.toLowerCase().startsWith('otpauth://')) return parseOtpAuth(trimmed);
+    const [secret, ...rest] = trimmed.split(/\s+/);
+    const label = rest.join(' ') || 'Token';
+    return { secret: sanitizeBase32(secret), label, digits: 6, period: 30, algorithm: 'SHA1' };
+  }
+
+  function loadTokens(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(!raw) return [];
+      const arr = JSON.parse(raw);
+      return arr.filter(t=>t.secret && t.label).map(t=>({...t, id: t.id || uuid()}));
+    }catch{ return []; }
+  }
+  function saveTokens(tokens){ localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens)); }
+
+  // ===== State =====
+  let TOKENS = loadTokens();
+  let NOW = Date.now();
+
+  // ===== UI Rendering =====
+  function render(){
+    const q = (elFilter.value||'').trim().toLowerCase();
+    const list = q ? TOKENS.filter(t => [t.label, t.issuer, t.secret].filter(Boolean).some(v=>String(v).toLowerCase().includes(q))) : TOKENS;
+    elCards.innerHTML = '';
+    elEmpty.style.display = list.length? 'none':'block';
+
+    for(const t of list){
+      const step = t.period;
+      const secsUsed = Math.floor((NOW/1000) % step);
+      const secsLeft = step - secsUsed;
+      const progress = Math.round((secsUsed/step)*100);
+
+      const card = document.createElement('div');
+      card.className='card';
+      card.dataset.id = t.id;
+
+      const issuer = document.createElement('div'); issuer.className='issuer'; issuer.textContent = t.issuer || '';
+      const label = document.createElement('div'); label.className='label'; label.textContent = t.label;
+
+      const codeRow = document.createElement('div'); codeRow.className='row';
+      const codeEl = document.createElement('div'); codeEl.className='code'; codeEl.textContent = '••••••';
+      codeEl.title='Нажмите, чтобы скопировать';
+      const btnCopy = document.createElement('button'); btnCopy.className='btn icon'; btnCopy.innerHTML='📋';
+      const copyHint = document.createElement('span'); copyHint.className='copy-ok'; copyHint.style.display='none'; copyHint.textContent='скопировано';
+      codeRow.append(codeEl, btnCopy, copyHint);
+
+      const meta = document.createElement('div'); meta.className='meta';
+      meta.innerHTML = `<span>${t.algorithm}</span><span class="sp">•</span><span>${t.digits} цифр</span><span class="sp">•</span><span>${t.period}s</span><span class="sp" style="margin-left:auto"></span><span>${secsLeft}s</span>`;
+
+      const progressEl = document.createElement('div'); progressEl.className='progress';
+      const bar = document.createElement('div'); bar.className='bar'; bar.style.width = progress+'%'; progressEl.append(bar);
+
+      const footer = document.createElement('div'); footer.className='footer';
+      const secret = document.createElement('div'); secret.className='secret'; secret.title=t.secret; secret.textContent = t.secret;
+      const btnDel = document.createElement('button'); btnDel.className='btn danger icon'; btnDel.title='Удалить'; btnDel.textContent='✖';
+      footer.append(secret, btnDel);
+
+      card.append(issuer,label,codeRow,meta,progressEl,footer);
+      elCards.append(card);
+
+      // compute code for this token (slot-based)
+      const slot = Math.floor(NOW/1000/step);
+      computeAndSetCode(t, slot, codeEl);
+
+      codeEl.addEventListener('click', () => doCopyCode(codeEl, copyHint));
+      btnCopy.addEventListener('click', () => doCopyCode(codeEl, copyHint));
+      btnDel.addEventListener('click', () => { TOKENS = TOKENS.filter(x=>x.id!==t.id); saveTokens(TOKENS); render(); });
+    }
+  }
+
+  async function computeAndSetCode(token, slot, codeEl){
+    try{
+      const c = await totp(token, NOW);
+      codeEl.textContent = formatCode(c);
+    }catch(e){ codeEl.textContent = 'Ошибка'; console.error(e); }
+  }
+
+  async function doCopyCode(codeEl, hint){
+    const raw = codeEl.textContent.replace(/\s+/g,'');
+    try{ await navigator.clipboard.writeText(raw); hint.style.display='inline'; setTimeout(()=>hint.style.display='none', 700);}catch{}
+  }
+
+  // ===== Actions =====
+  function addLines(lines){
+    const added=[];
+    for(const line of lines){
+      const parsed = parseLooseLine(line);
+      if(!parsed || !parsed.secret) continue;
+      const algo = (parsed.algorithm||'SHA1').toUpperCase();
+      if(!ALGOS.includes(algo)) parsed.algorithm='SHA1';
+      added.push({ id: uuid(), label: parsed.label||'Token', issuer: parsed.issuer, secret: parsed.secret, digits: parsed.digits||6, period: parsed.period||30, algorithm: parsed.algorithm||'SHA1' });
+    }
+    if(added.length){ TOKENS = TOKENS.concat(added); saveTokens(TOKENS); render(); }
+  }
+
+  elBtnAdd.addEventListener('click', ()=>{ const lines = elInput.value.split(/\r?\n/).filter(Boolean); addLines(lines); elInput.value=''; });
+  elBtnPaste.addEventListener('click', async ()=>{ try{ const text = await navigator.clipboard.readText(); const lines = text.split(/\r?\n/).filter(Boolean); addLines(lines);}catch(e){ alert('Не удалось прочитать буфер обмена: '+e.message); } });
+  elFilter.addEventListener('input', render);
+
+  elBtnExport.addEventListener('click', ()=>{
+    const blob = new Blob([JSON.stringify(TOKENS,null,2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = 'totp_tokens.json'; a.click(); URL.revokeObjectURL(url);
+  });
+
+  elBtnImport.addEventListener('click', ()=> elFile.click());
+  elFile.addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0]; if(!f) return;
+    const reader = new FileReader(); reader.onload = ()=>{
+      try{ const data = JSON.parse(String(reader.result)); if(Array.isArray(data)){ const normalized = data.map(d=>({...d,id:uuid()})).filter(t=>t.secret && t.label); TOKENS = TOKENS.concat(normalized); saveTokens(TOKENS); render(); } else { alert('Неверный формат JSON'); } }
+      catch(err){ alert('Ошибка чтения JSON: '+err.message); }
+    }; reader.readAsText(f); e.target.value='';
+  });
+
+  // ===== Ticker =====
+  setInterval(()=>{ NOW = Date.now(); render(); }, 400);
+
+  // initial render
+  render();
+})();
+
+function mapAlgo(a){
+  if (a === 'SHA1')   return 'SHA-1';
+  if (a === 'SHA256') return 'SHA-256';
+  if (a === 'SHA512') return 'SHA-512';
+  return a;
+}
+</script>
+</body>
+</html>
