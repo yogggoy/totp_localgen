@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -52,28 +52,30 @@
   <div class="wrap">
     <header>
       <div>
-        <h1>TOTP Dashboard (локально)</h1>
-        <div class="muted small">Коды 2FA для нескольких токенов. Данные хранятся в <b>localStorage</b>, без сети.</div>
+        <h1>TOTP Dashboard (offline)</h1>
+        <div class="muted small">Dashboard for 2FA tokens. Data is stored in <b>localStorage</b>, offline.</div>
       </div>
       <div class="row">
-        <button class="btn secondary" id="btnImport">Импорт JSON</button>
-        <button class="btn secondary" id="btnExport">Экспорт JSON</button>
+        <button class="btn secondary" id="btnImport">Import JSON</button>
+        <button class="btn secondary" id="btnExport">Export JSON</button>
       </div>
       <input type="file" id="fileInput" accept="application/json" hidden>
     </header>
 
-    <section class="panel" aria-label="Добавить токены">
+    <section class="panel" aria-label="Add tokens">
       <div class="head">
-        <div><b>Добавить токены</b></div>
-        <div class="hint">Форматы: <code>otpauth://...</code> или <code>SECRET [Метка]</code> — по строке на запись</div>
+        <div><b>Add tokens</b></div>
+        <div class="hint">Format: <code>otpauth://...</code> or <code>SECRET [label]</code> one per line</div>
       </div>
       <div class="body">
-        <textarea id="multiInput" placeholder="Примеры:\notpauth://totp/GitHub:max@example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub\nJBSWY3DPEHPK3PXP GitHub"></textarea>
+        <textarea id="multiInput" placeholder="Examples:
+otpauth://totp/GitHub:max@example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub
+JBSWY3DPEHPK3PXP GitHub"></textarea>
         <div class="row" style="margin-top:8px">
-          <button class="btn" id="btnAdd">Добавить</button>
-          <button class="btn secondary" id="btnPaste">Вставить из буфера</button>
+          <button class="btn" id="btnAdd">Add</button>
+          <button class="btn secondary" id="btnPaste">Paste from clipboard</button>
           <div class="spacer"></div>
-          <input class="input" id="filter" placeholder="Фильтр (метка/эмитент/секрет)" style="max-width:320px">
+          <input class="input" id="filter" placeholder="Filter (label/issuer/secret)" style="max-width:320px">
         </div>
       </div>
     </section>
@@ -82,9 +84,9 @@
 
     <section id="cards" class="grid" aria-live="polite"></section>
 
-    <div id="empty" class="grid-empty" style="display:none">Нет сохранённых токенов.</div>
+    <div id="empty" class="grid-empty" style="display:none">No tokens yet.</div>
 
-    <p class="hint" style="margin-top:14px">Безопасность: секреты TOTP сохраняются <span class="danger-text">в открытом виде</span> в localStorage. Используйте только на доверенном устройстве.</p>
+    <p class="hint" style="margin-top:14px">Security: TOTP secrets are stored <span class="danger-text">unencrypted</span> in localStorage. Use only on a trusted computer.</p>
   </div>
 
 <script>
@@ -205,6 +207,7 @@
   // ===== State =====
   let TOKENS = loadTokens();
   let NOW = Date.now();
+  let TOKEN_MAP = new Map();
 
   // ===== UI Rendering =====
   function render(){
@@ -212,13 +215,9 @@
     const list = q ? TOKENS.filter(t => [t.label, t.issuer, t.secret].filter(Boolean).some(v=>String(v).toLowerCase().includes(q))) : TOKENS;
     elCards.innerHTML = '';
     elEmpty.style.display = list.length? 'none':'block';
+    TOKEN_MAP = new Map(TOKENS.map(t => [t.id, t]));
 
     for(const t of list){
-      const step = t.period;
-      const secsUsed = Math.floor((NOW/1000) % step);
-      const secsLeft = step - secsUsed;
-      const progress = Math.round((secsUsed/step)*100);
-
       const card = document.createElement('div');
       card.className='card';
       card.dataset.id = t.id;
@@ -227,41 +226,38 @@
       const label = document.createElement('div'); label.className='label'; label.textContent = t.label;
 
       const codeRow = document.createElement('div'); codeRow.className='row';
-      const codeEl = document.createElement('div'); codeEl.className='code'; codeEl.textContent = '••••••';
-      codeEl.title='Нажмите, чтобы скопировать';
-      const btnCopy = document.createElement('button'); btnCopy.className='btn icon'; btnCopy.innerHTML='📋';
-      const copyHint = document.createElement('span'); copyHint.className='copy-ok'; copyHint.style.display='none'; copyHint.textContent='скопировано';
+      const codeEl = document.createElement('div'); codeEl.className='code'; codeEl.textContent = '------';
+      codeEl.title='Click to copy';
+      const btnCopy = document.createElement('button'); btnCopy.className='btn icon'; btnCopy.innerHTML='Copy';
+      const copyHint = document.createElement('span'); copyHint.className='copy-ok'; copyHint.style.display='none'; copyHint.textContent='Copied';
       codeRow.append(codeEl, btnCopy, copyHint);
 
       const meta = document.createElement('div'); meta.className='meta';
-      meta.innerHTML = `<span>${t.algorithm}</span><span class="sp">•</span><span>${t.digits} цифр</span><span class="sp">•</span><span>${t.period}s</span><span class="sp" style="margin-left:auto"></span><span>${secsLeft}s</span>`;
+      meta.innerHTML = `<span>${t.algorithm}</span><span class="sp"> | </span><span>${t.digits} digits</span><span class="sp"> | </span><span>${t.period}s</span><span class="sp" style="margin-left:auto"></span><span class="secs-left"></span>`;
 
       const progressEl = document.createElement('div'); progressEl.className='progress';
-      const bar = document.createElement('div'); bar.className='bar'; bar.style.width = progress+'%'; progressEl.append(bar);
+      const bar = document.createElement('div'); bar.className='bar'; progressEl.append(bar);
 
       const footer = document.createElement('div'); footer.className='footer';
       const secret = document.createElement('div'); secret.className='secret'; secret.title=t.secret; secret.textContent = t.secret;
-      const btnDel = document.createElement('button'); btnDel.className='btn danger icon'; btnDel.title='Удалить'; btnDel.textContent='✖';
+      const btnDel = document.createElement('button'); btnDel.className='btn danger icon'; btnDel.title='Delete'; btnDel.textContent='Del';
       footer.append(secret, btnDel);
 
       card.append(issuer,label,codeRow,meta,progressEl,footer);
       elCards.append(card);
 
-      // compute code for this token (slot-based)
-      const slot = Math.floor(NOW/1000/step);
-      computeAndSetCode(t, slot, codeEl);
-
       codeEl.addEventListener('click', () => doCopyCode(codeEl, copyHint));
       btnCopy.addEventListener('click', () => doCopyCode(codeEl, copyHint));
       btnDel.addEventListener('click', () => { TOKENS = TOKENS.filter(x=>x.id!==t.id); saveTokens(TOKENS); render(); });
     }
+    updateVisible();
   }
 
-  async function computeAndSetCode(token, slot, codeEl){
+  async function computeAndSetCode(token, codeEl){
     try{
       const c = await totp(token, NOW);
       codeEl.textContent = formatCode(c);
-    }catch(e){ codeEl.textContent = 'Ошибка'; console.error(e); }
+    }catch(e){ codeEl.textContent = 'Error'; console.error(e); }
   }
 
   async function doCopyCode(codeEl, hint){
@@ -282,8 +278,31 @@
     if(added.length){ TOKENS = TOKENS.concat(added); saveTokens(TOKENS); render(); }
   }
 
+  function updateVisible(){
+    const cards = elCards.children;
+    for(const card of cards){
+      const token = TOKEN_MAP.get(card.dataset.id);
+      if(!token) continue;
+      const step = token.period;
+      const secsUsed = Math.floor((NOW/1000) % step);
+      const secsLeft = step - secsUsed;
+      const progress = Math.round((secsUsed/step)*100);
+      const bar = card.querySelector('.bar');
+      if(bar) bar.style.width = progress + '%';
+      const secsEl = card.querySelector('.secs-left');
+      if(secsEl) secsEl.textContent = secsLeft + 's';
+      const slot = Math.floor(NOW/1000/step);
+      const lastSlot = Number(card.dataset.slot || -1);
+      if(slot !== lastSlot){
+        card.dataset.slot = String(slot);
+        const codeEl = card.querySelector('.code');
+        if(codeEl) computeAndSetCode(token, codeEl);
+      }
+    }
+  }
+
   elBtnAdd.addEventListener('click', ()=>{ const lines = elInput.value.split(/\r?\n/).filter(Boolean); addLines(lines); elInput.value=''; });
-  elBtnPaste.addEventListener('click', async ()=>{ try{ const text = await navigator.clipboard.readText(); const lines = text.split(/\r?\n/).filter(Boolean); addLines(lines);}catch(e){ alert('Не удалось прочитать буфер обмена: '+e.message); } });
+  elBtnPaste.addEventListener('click', async ()=>{ try{ const text = await navigator.clipboard.readText(); const lines = text.split(/\r?\n/).filter(Boolean); addLines(lines);}catch(e){ alert('Failed to read clipboard: '+e.message); } });
   elFilter.addEventListener('input', render);
 
   elBtnExport.addEventListener('click', ()=>{
@@ -296,13 +315,14 @@
   elFile.addEventListener('change', (e)=>{
     const f = e.target.files && e.target.files[0]; if(!f) return;
     const reader = new FileReader(); reader.onload = ()=>{
-      try{ const data = JSON.parse(String(reader.result)); if(Array.isArray(data)){ const normalized = data.map(d=>({...d,id:uuid()})).filter(t=>t.secret && t.label); TOKENS = TOKENS.concat(normalized); saveTokens(TOKENS); render(); } else { alert('Неверный формат JSON'); } }
-      catch(err){ alert('Ошибка чтения JSON: '+err.message); }
+      try{ const data = JSON.parse(String(reader.result)); if(Array.isArray(data)){ const normalized = data.map(d=>({...d,id:uuid()})).filter(t=>t.secret && t.label); TOKENS = TOKENS.concat(normalized); saveTokens(TOKENS); render(); } else { alert('Invalid JSON format'); } }
+      catch(err){ alert('JSON parse error: '+err.message); }
     }; reader.readAsText(f); e.target.value='';
   });
 
   // ===== Ticker =====
-  setInterval(()=>{ NOW = Date.now(); render(); }, 400);
+  setInterval(()=>{ NOW = Date.now(); updateVisible(); }, 250);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ NOW = Date.now(); updateVisible(); } });
 
   // initial render
   render();
