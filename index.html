@@ -58,6 +58,7 @@
       <div class="row">
         <button class="btn secondary" id="btnImport">Import JSON</button>
         <button class="btn secondary" id="btnExport">Export JSON</button>
+        <button class="btn danger" id="btnDeleteAll">Delete all</button>
       </div>
       <input type="file" id="fileInput" accept="application/json" hidden>
     </header>
@@ -105,6 +106,7 @@ JBSWY3DPEHPK3PXP GitHub"></textarea>
   const elBtnPaste = $('#btnPaste');
   const elBtnExport = $('#btnExport');
   const elBtnImport = $('#btnImport');
+  const elBtnDeleteAll = $('#btnDeleteAll');
   const elFile = $('#fileInput');
 
   function uuid(){ try{ return crypto.randomUUID(); }catch{ return Math.random().toString(36).slice(2);} }
@@ -309,6 +311,14 @@ JBSWY3DPEHPK3PXP GitHub"></textarea>
     const blob = new Blob([JSON.stringify(TOKENS,null,2)], {type:'application/json'});
     const url = URL.createObjectURL(blob); const a = document.createElement('a');
     a.href = url; a.download = 'totp_tokens.json'; a.click(); URL.revokeObjectURL(url);
+  });
+
+  elBtnDeleteAll.addEventListener('click', ()=>{
+    if(!TOKENS.length) return;
+    if(!confirm('Delete all tokens? This cannot be undone.')) return;
+    TOKENS = [];
+    saveTokens(TOKENS);
+    render();
   });
 
   elBtnImport.addEventListener('click', ()=> elFile.click());
